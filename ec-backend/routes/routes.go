@@ -21,7 +21,12 @@ func Register(r *gin.Engine) {
 	protected := api.Group("/")
 	protected.Use(middleware.AuthRequired())
 	{
-		// Phase 3 — energy handlers go here
+		// Panels
+		protected.POST("panels/register", handlers.RegisterPanel)
+
+		// Energy
+		protected.POST("energy/log", handlers.LogEnergy)
+		protected.GET("energy/batches", handlers.GetBatches)
 		// Phase 4 — marketplace handlers go here
 		// Phase 5 — EC economy handlers go here
 	}
