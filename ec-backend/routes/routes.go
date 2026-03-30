@@ -27,7 +27,13 @@ func Register(r *gin.Engine) {
 		// Energy
 		protected.POST("energy/log", handlers.LogEnergy)
 		protected.GET("energy/batches", handlers.GetBatches)
-		// Phase 4 — marketplace handlers go here
+
+		// Listings
+		protected.POST("listings", handlers.CreateListing)
+		protected.GET("listings", handlers.GetListings)
+		protected.POST("listings/:id/buy", handlers.BuyListing)
+		protected.DELETE("listings/:id", handlers.CancelListing)
+
 		// Phase 5 — EC economy handlers go here
 	}
 }

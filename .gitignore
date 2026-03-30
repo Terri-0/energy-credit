@@ -19,3 +19,7 @@ tmp/
 
 # VS Code settings (optional — remove if you want to share settings with teammates)
 .vscode/
+
+CLAUDE.md
+
+.claude
