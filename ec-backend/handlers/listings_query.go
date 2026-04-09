@@ -11,6 +11,11 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+type listingResponse struct {
+	models.Listing
+	SellerName string `json:"seller_name"`
+}
+
 func GetListings(c *gin.Context) {
 	_, ok := getUserID(c)
 	if !ok {
@@ -42,6 +47,7 @@ func GetListings(c *gin.Context) {
 
 	var listings []models.Listing
 	if err := config.DB.
+		Preload("Seller").
 		Where("status = ? AND expires_at > ?", listingStatusOpen, time.Now()).
 		Order("created_at desc").
 		Limit(limit).
@@ -51,5 +57,14 @@ func GetListings(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"listings": listings})
+	result := make([]listingResponse, len(listings))
+	for i, l := range listings {
+		name := l.Seller.Name
+		if name == "" {
+			name = "Unknown"
+		}
+		result[i] = listingResponse{Listing: l, SellerName: name}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"listings": result})
 }

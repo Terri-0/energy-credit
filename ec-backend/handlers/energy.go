@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
@@ -28,7 +29,7 @@ func LogEnergy(c *gin.Context) {
 		return
 	}
 
-	// Verify panel belongs to this user and is active
+	// Verify panel belongs to this user and is active.
 	var panel models.Panel
 	if err := config.DB.Where("id = ? AND user_id = ? AND is_active = true",
 		input.PanelID, userID).First(&panel).Error; err != nil {
@@ -36,112 +37,67 @@ func LogEnergy(c *gin.Context) {
 		return
 	}
 
-	// Calculate EC minting
-	mintRate, err := getEnvFloat("EC_MINT_RATE", 0.05)
-	if err != nil || mintRate <= 0 {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid EC_MINT_RATE configuration"})
-		return
-	}
-
-	mintFee, err := getEnvFloat("EC_MINT_FEE", 0.06)
-	if err != nil || mintFee < 0 || mintFee >= 1 {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid EC_MINT_FEE configuration"})
-		return
-	}
-
 	whAmount := roundTo(input.WhAmount, 6)
-	ecGross := roundTo(whAmount*mintRate, 6)
-	ecFee := roundTo(ecGross*mintFee, 6)
-	ecMinted := roundTo(ecGross-ecFee, 6)
 
-	tx := config.DB.Begin()
-	if tx.Error != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not start transaction"})
-		return
-	}
-
-	// 1. Create energy log
-	energyLog := models.EnergyLog{
-		UserID:    userID,
-		PanelID:   input.PanelID,
-		WhAmount:  whAmount,
-		EcMinted:  ecMinted,
-		FeeBurned: ecFee,
-	}
-	if err := tx.Create(&energyLog).Error; err != nil {
-		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not create energy log"})
-		return
-	}
-
-	// 2. Create Wh batch (expires in 30 days)
-	now := time.Now()
-	batch := models.WhBatch{
-		UserID:      userID,
-		EnergyLogID: energyLog.ID,
-		WhRemaining: whAmount,
-		Status:      "available",
-		CreatedAt:   now,
-		ExpiresAt:   now.Add(30 * 24 * time.Hour),
-	}
-	if err := tx.Create(&batch).Error; err != nil {
-		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not create Wh batch"})
-		return
-	}
-
-	// 3. Add EC to user balance
-	userUpdate := tx.Model(&models.User{}).
-		Where("id = ?", userID).
-		UpdateColumn("ec_balance", gorm.Expr("ec_balance + ?", ecMinted))
-	if userUpdate.Error != nil {
-		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not update EC balance"})
-		return
-	}
-	if userUpdate.RowsAffected != 1 {
-		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not update EC balance"})
-		return
-	}
-
-	// Ensure singleton reserve row exists.
-	reserve := models.PlatformReserve{ID: 1}
-	if err := tx.Where("id = ?", 1).FirstOrCreate(&reserve, models.PlatformReserve{ID: 1}).Error; err != nil {
-		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not initialize platform reserve"})
-		return
-	}
-
-	// 4. Add fee to platform reserve
-	reserveUpdate := tx.Model(&models.PlatformReserve{}).
-		Where("id = 1").
-		Updates(map[string]interface{}{
-			"ec_available":    gorm.Expr("ec_available + ?", ecFee),
-			"total_ec_issued": gorm.Expr("total_ec_issued + ?", ecMinted),
-			"total_ec_burned": gorm.Expr("total_ec_burned + ?", ecFee),
+	// Enforce accumulated generation ceiling (simulation: panel generates capacity_wh per 24h).
+	avail := accumulatedWh(panel, time.Now())
+	if avail <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "panel has not generated any energy yet — check back later",
 		})
-	if reserveUpdate.Error != nil {
-		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not update platform reserve"})
 		return
 	}
-	if reserveUpdate.RowsAffected != 1 {
-		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not update platform reserve"})
+	if whAmount > avail {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": fmt.Sprintf("panel has only accumulated %.2f Wh since last log", avail),
+		})
 		return
 	}
 
-	if err := tx.Commit().Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not finalize transaction"})
+	var energyLog models.EnergyLog
+	var batch models.WhBatch
+	txErr := config.DB.Transaction(func(tx *gorm.DB) error {
+		now := time.Now()
+
+		// Stamp last_logged_at on the panel so accumulation resets.
+		if err := tx.Model(&models.Panel{}).Where("id = ?", input.PanelID).
+			Update("last_logged_at", now).Error; err != nil {
+			return err
+		}
+
+		energyLog = models.EnergyLog{
+			UserID:   userID,
+			PanelID:  input.PanelID,
+			WhAmount: whAmount,
+			// EcMinted and FeeBurned remain 0 until the batch is explicitly minted.
+		}
+		if err := tx.Create(&energyLog).Error; err != nil {
+			return err
+		}
+
+		batch = models.WhBatch{
+			UserID:      userID,
+			EnergyLogID: energyLog.ID,
+			WhRemaining: whAmount,
+			Status:      batchStatusAvailable,
+			CreatedAt:   now,
+			ExpiresAt:   now.Add(30 * 24 * time.Hour),
+		}
+		if err := tx.Create(&batch).Error; err != nil {
+			return err
+		}
+
+		return nil
+	})
+	if txErr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not log energy"})
 		return
 	}
 
 	c.JSON(http.StatusCreated, gin.H{
 		"energy_log": energyLog,
 		"batch":      batch,
-		"ec_minted":  ecMinted,
-		"ec_fee":     ecFee,
-		"message":    "Energy logged and EC minted successfully",
+		"message":    "Energy logged. Mint to EC, list on the marketplace, or apply to bill offset.",
 	})
 }
+

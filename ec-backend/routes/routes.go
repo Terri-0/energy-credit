@@ -23,10 +23,12 @@ func Register(r *gin.Engine) {
 	{
 		// Panels
 		protected.POST("panels/register", handlers.RegisterPanel)
+		protected.GET("panels", handlers.GetPanels)
 
 		// Energy
 		protected.POST("energy/log", handlers.LogEnergy)
 		protected.GET("energy/batches", handlers.GetBatches)
+		protected.POST("energy/batches/:id/mint", handlers.MintBatch)
 
 		// Listings
 		protected.POST("listings", handlers.CreateListing)
@@ -34,6 +36,9 @@ func Register(r *gin.Engine) {
 		protected.POST("listings/:id/buy", handlers.BuyListing)
 		protected.DELETE("listings/:id", handlers.CancelListing)
 
-		// Phase 5 — EC economy handlers go here
+		// Economy
+		protected.POST("economy/offset", handlers.OffsetBatch)
+		protected.POST("economy/buy-ec", handlers.BuyEC)
+		protected.GET("economy/reserve", handlers.GetReserve)
 	}
 }

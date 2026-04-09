@@ -71,14 +71,15 @@ func CreateListing(c *gin.Context) {
 		return
 	}
 
-	// Validate ec_price is at or below grid price
-	gridPrice, err := getEnvFloat("GRID_PRICE", 0.10)
-	if err != nil || gridPrice <= 0 {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid GRID_PRICE configuration"})
+	// Ceiling: ec_price is in EC/Wh; the grid parity ceiling is 1 EC/kWh = 0.001 EC/Wh
+	// (since 1 EC = 1 kWh = $0.10 CAD — you cannot sell Wh for more than its grid value).
+	listingCeiling, err := getEnvFloat("EC_LISTING_CEILING", 0.001)
+	if err != nil || listingCeiling <= 0 {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid EC_LISTING_CEILING configuration"})
 		return
 	}
-	if ecPrice > gridPrice {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "ec_price cannot exceed grid price"})
+	if ecPrice > listingCeiling {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ec_price cannot exceed grid parity ceiling (0.001 EC/Wh)"})
 		return
 	}
 

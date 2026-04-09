@@ -19,6 +19,7 @@ const (
 const (
 	batchStatusAvailable = "available"
 	batchStatusListed    = "listed"
+	batchStatusMinted    = "minted"
 	batchStatusOffset    = "offset"
 	batchStatusExpired   = "expired"
 )

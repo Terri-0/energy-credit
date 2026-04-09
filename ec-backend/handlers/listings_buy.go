@@ -27,6 +27,7 @@ func BuyListing(c *gin.Context) {
 	}
 
 	var txRecord models.Transaction
+	var buyerBatch models.WhBatch
 	txErr := config.DB.Transaction(func(tx *gorm.DB) error {
 		// 1. Lock listing row FOR UPDATE
 		var listing models.Listing
@@ -177,6 +178,19 @@ func BuyListing(c *gin.Context) {
 			return err
 		}
 
+		// 11. Create a new available batch for the buyer so they own the energy.
+		buyerBatch = models.WhBatch{
+			UserID:      buyerID,
+			EnergyLogID: batch.EnergyLogID,
+			WhRemaining: listing.WhAmount,
+			Status:      batchStatusAvailable,
+			CreatedAt:   now,
+			ExpiresAt:   batch.ExpiresAt,
+		}
+		if err := tx.Create(&buyerBatch).Error; err != nil {
+			return err
+		}
+
 		return nil
 	})
 	if txErr != nil {
@@ -189,5 +203,5 @@ func BuyListing(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"transaction": txRecord})
+	c.JSON(http.StatusOK, gin.H{"transaction": txRecord, "batch": buyerBatch})
 }

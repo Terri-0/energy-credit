@@ -39,6 +39,18 @@ func getEnvFloat(name string, defaultValue float64) (float64, error) {
 	return value, nil
 }
 
+func getEnvInt(name string, defaultValue int) int {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return defaultValue
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return defaultValue
+	}
+	return value
+}
+
 func roundTo(value float64, decimals int) float64 {
 	multiplier := math.Pow(10, float64(decimals))
 	return math.Round(value*multiplier) / multiplier
