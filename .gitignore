@@ -20,6 +20,7 @@ tmp/
 # VS Code settings (optional — remove if you want to share settings with teammates)
 .vscode/
 
+# CLAUDE AI config files used for coding help, testing, and quick reviews of codebase.
 CLAUDE.md
 
 .claude
