@@ -11,14 +11,14 @@ EnergyCredit lets solar panel owners log generated energy, convert it into Energ
 
 ### Economic Model
 
-| Parameter | Value |
-|-----------|-------|
-| 1 EC | 1 kWh ≈ $0.10 CAD |
-| Mint rate | 0.7 EC/kWh (30% below grid parity) |
-| Mint fee | 6% burned to platform reserve |
+| Parameter       | Value                                                      |
+| --------------- | ---------------------------------------------------------- |
+| 1 EC            | 1 kWh ≈ $0.10 CAD                                          |
+| Mint rate       | 0.7 EC/kWh (30% below grid parity)                         |
+| Mint fee        | 6% burned to platform reserve                              |
 | Listing ceiling | 1.0 EC/kWh (grid parity — buyers always save vs. the grid) |
-| Signup grant | 50 EC (~$5 CAD) |
-| Batch expiry | 30 days |
+| Signup grant    | 50 EC (~$5 CAD)                                            |
+| Batch expiry    | 30 days                                                    |
 
 The mint rate is intentionally set below the listing ceiling to incentivise selling on the marketplace rather than minting directly.
 
@@ -26,11 +26,11 @@ The mint rate is intentionally set below the listing ceiling to incentivise sell
 
 ## Stack
 
-| Layer | Technology |
-|-------|-----------|
+| Layer    | Technology                                     |
+| -------- | ---------------------------------------------- |
 | Frontend | React 19 + Vite 7 + Tailwind v4 + lucide-react |
-| Backend | Go 1.24 + Gin v1.11 + GORM v1.31 + JWT v5 |
-| Database | PostgreSQL 16 (Docker) |
+| Backend  | Go 1.24 + Gin v1.11 + GORM v1.31 + JWT v5      |
+| Database | PostgreSQL 16 (Docker)                         |
 
 ---
 
@@ -54,8 +54,9 @@ cd energy-credit
 The backend loads `.env` from the project root automatically. A `.env` is already included in the repository with sensible defaults — no changes needed to run locally.
 
 Key variables in `.env`:
+
 ```
-DB_URL                 # PostgreSQL connection string
+DB_URL                 # PostgreSQL connection string the exact link provided in env.example
 JWT_SECRET             # signing secret for auth tokens
 EC_MINT_RATE=0.0007    # EC per Wh minted (0.7 EC/kWh)
 EC_MINT_FEE=0.06       # platform fee fraction (6%)
