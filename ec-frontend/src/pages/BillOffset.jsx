@@ -1,14 +1,30 @@
-import { useState } from "react";
-import { Receipt, Check } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { Receipt, Check, Leaf, CalendarDays } from "lucide-react";
 import client from "../api/client";
 import { apiError, whToCAD, fmtDate } from "../constants";
 import { Card, PrimaryBtn, PageHeader, ExpiryBadge } from "../components/ui";
+import OffsetModal from "../components/OffsetModal";
 
 export default function BillOffset({ batches, setBatches }) {
-  const [selected, setSelected] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [result, setResult] = useState(null);
+  const [selected, setSelected]   = useState([]);
+  const [loading, setLoading]     = useState(false);
+  const [error, setError]         = useState("");
+  const [result, setResult]       = useState(null);
+
+  const [confirming, setConfirming]   = useState(false);
+  const [offsetLog, setOffsetLog]     = useState(null);
+  const [logLoading, setLogLoading]   = useState(true);
+
+  const fetchLog = useCallback(() => {
+    setLogLoading(true);
+    client
+      .get("/economy/offsets")
+      .then((res) => setOffsetLog(res.data))
+      .catch(() => setOffsetLog(null))
+      .finally(() => setLogLoading(false));
+  }, []);
+
+  useEffect(() => { fetchLog(); }, [fetchLog]);
 
   const available = batches.filter((b) => b.status === "available");
 
@@ -17,10 +33,9 @@ export default function BillOffset({ batches, setBatches }) {
     setSelected((p) => p.includes(id) ? p.filter((x) => x !== id) : [...p, id]);
   };
 
-  const sel      = available.filter((b) => selected.includes(b.id));
-  const totalWh  = sel.reduce((s, b) => s + b.wh_remaining, 0);
-  const savings  = whToCAD(totalWh).toFixed(2);
-  const ecEquiv  = whToCAD(totalWh).toFixed(2);
+  const sel     = available.filter((b) => selected.includes(b.id));
+  const totalWh = sel.reduce((s, b) => s + b.wh_remaining, 0);
+  const savings = whToCAD(totalWh).toFixed(2);
 
   const apply = async () => {
     if (!sel.length) return;
@@ -35,16 +50,23 @@ export default function BillOffset({ batches, setBatches }) {
       setBatches((prev) => prev.filter((b) => !succeededIds.includes(b.id)));
       setResult({ count: sel.length, totalWh, savings });
       setSelected([]);
+      setConfirming(false);
+      fetchLog();
     } catch (err) {
       if (succeededIds.length) {
         setBatches((prev) => prev.filter((b) => !succeededIds.includes(b.id)));
         setSelected((prev) => prev.filter((id) => !succeededIds.includes(id)));
+        fetchLog();
       }
+      setConfirming(false);
       setError(apiError(err));
     } finally {
       setLoading(false);
     }
   };
+
+  const confirmApply = () => { if (sel.length) setConfirming(true); };
+  const cancelConfirm = () => setConfirming(false);
 
   if (result) {
     return (
@@ -65,18 +87,31 @@ export default function BillOffset({ batches, setBatches }) {
     );
   }
 
+  const logEntries = offsetLog?.offsets ?? [];
+  const monthLabel = offsetLog?.month ?? "";
+
   return (
-    <div className="p-7 max-w-5xl">
+    <div className="p-7 max-w-5xl space-y-8">
+      {confirming && (
+        <OffsetModal
+          batches={sel}
+          loading={loading}
+          onConfirm={apply}
+          onCancel={cancelConfirm}
+        />
+      )}
+
       <PageHeader title="Bill Offset" sub="Select energy batches to offset your electricity bill" />
 
       {error && (
-        <div className="mb-5 p-3 rounded-xl bg-red-50 border border-red-200">
+        <div className="p-3 rounded-xl bg-red-50 border border-red-200">
           <p className="text-sm text-red-600">{error}</p>
         </div>
       )}
 
+      {/* ── apply offset ──────────────────────────────────────────────── */}
       {available.length === 0 ? (
-        <div className="text-center py-14 text-slate-400">
+        <div className="text-center py-12 text-slate-400">
           <Receipt size={40} className="mx-auto mb-3 opacity-30" />
           <p className="text-sm">No available batches — log energy to create batches.</p>
         </div>
@@ -130,7 +165,7 @@ export default function BillOffset({ batches, setBatches }) {
                 {[
                   { label: "Batches selected", value: selected.length },
                   { label: "Total energy",     value: `${totalWh.toLocaleString()} Wh` },
-                  { label: "Grid value",        value: `$${ecEquiv} CAD` },
+                  { label: "Grid value",        value: `$${savings} CAD` },
                 ].map((r) => (
                   <div key={r.label} className="flex justify-between text-sm">
                     <span className="text-slate-400">{r.label}</span>
@@ -144,13 +179,80 @@ export default function BillOffset({ batches, setBatches }) {
                   </div>
                 </div>
               </div>
-              <PrimaryBtn onClick={apply} disabled={selected.length === 0 || loading} className="w-full py-3">
-                {loading ? "Applying…" : "Apply Offset"}
+              <PrimaryBtn onClick={confirmApply} disabled={selected.length === 0 || loading} className="w-full py-3">
+                Apply Offset
               </PrimaryBtn>
             </Card>
           </div>
         </div>
       )}
+
+      {/* ── monthly log ───────────────────────────────────────────────── */}
+      <div>
+        <div className="flex items-center gap-2 mb-4">
+          <CalendarDays size={15} className="text-slate-400" />
+          <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">
+            {monthLabel ? `Offset Log — ${monthLabel}` : "Offset Log"}
+          </p>
+          <span className="text-xs text-slate-300 ml-1">(resets each month)</span>
+        </div>
+
+        {logLoading ? (
+          <Card className="p-6 text-center text-sm text-slate-400">Loading…</Card>
+        ) : logEntries.length === 0 ? (
+          <Card className="p-8 text-center">
+            <Leaf size={28} className="mx-auto mb-2 opacity-20 text-slate-400" />
+            <p className="text-sm text-slate-400">No offsets applied this month yet.</p>
+          </Card>
+        ) : (
+          <Card className="overflow-hidden">
+            {/* summary bar */}
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between gap-4 flex-wrap"
+                 style={{ background: "#f0fdf4" }}>
+              <div className="flex items-center gap-2">
+                <Leaf size={15} style={{ color: "#16a34a" }} />
+                <span className="text-sm font-bold" style={{ color: "#15803d" }}>
+                  {(offsetLog.total_wh / 1000).toFixed(2)} kWh offset this month
+                </span>
+              </div>
+              <div className="flex items-center gap-5">
+                <div className="text-right">
+                  <p className="text-xs text-slate-400">Total Wh</p>
+                  <p className="font-black text-slate-800">{offsetLog.total_wh.toLocaleString()} Wh</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-xs text-slate-400">Estimated Savings</p>
+                  <p className="text-xl font-black" style={{ color: "#16a34a" }}>${offsetLog.total_cad.toFixed(2)} CAD</p>
+                </div>
+              </div>
+            </div>
+
+            {/* individual entries */}
+            <div className="divide-y divide-slate-50">
+              {logEntries.map((o) => (
+                <div key={o.id} className="px-6 py-3 flex items-center gap-4">
+                  <span className="font-mono text-xs bg-slate-100 text-slate-500 px-2 py-1 rounded-lg shrink-0">
+                    #{o.batch_id}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-slate-800">
+                      {o.wh_amount.toLocaleString()} Wh
+                    </p>
+                    <p className="text-xs text-slate-400">{fmtDate(o.created_at)}</p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="text-sm font-black text-slate-800">
+                      ${whToCAD(o.wh_amount).toFixed(4)}{" "}
+                      <span className="text-xs font-semibold text-slate-400">CAD</span>
+                    </p>
+                    <p className="text-xs text-slate-400">grid value offset</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
+      </div>
     </div>
   );
 }

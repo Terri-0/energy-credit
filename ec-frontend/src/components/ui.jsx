@@ -25,18 +25,22 @@ export const Card = ({ children, className = "" }) => (
   </div>
 );
 
-export const PrimaryBtn = ({ children, onClick, disabled, className = "" }) => (
-  <button
-    onClick={onClick}
-    disabled={disabled}
-    className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold text-white transition-all active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed ${className}`}
-    style={{ background: disabled ? "#7dd3fc" : "#38bdf8" }}
-    onMouseEnter={(e) => !disabled && (e.currentTarget.style.background = "#0ea5e9")}
-    onMouseLeave={(e) => !disabled && (e.currentTarget.style.background = "#38bdf8")}
-  >
-    {children}
-  </button>
-);
+export const PrimaryBtn = ({ children, onClick, disabled, className = "", style: styleProp = {} }) => {
+  const base   = disabled ? "#7dd3fc" : "#38bdf8";
+  const hover  = "#0ea5e9";
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold text-white transition-all active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed ${className}`}
+      style={{ background: base, ...styleProp }}
+      onMouseEnter={(e) => { if (!disabled && !styleProp.background) e.currentTarget.style.background = hover; }}
+      onMouseLeave={(e) => { if (!disabled && !styleProp.background) e.currentTarget.style.background = base; }}
+    >
+      {children}
+    </button>
+  );
+};
 
 export const GhostBtn = ({ children, onClick, className = "" }) => (
   <button

@@ -3,6 +3,7 @@ import { ShoppingCart, Zap, Check, X } from "lucide-react";
 import client from "../api/client";
 import { apiError, whToCAD, fmtDate } from "../constants";
 import { Card, PrimaryBtn, PageHeader, Spinner } from "../components/ui";
+import BuyModal from "../components/BuyModal";
 
 export default function Marketplace({ user, updateUser, listings, setListings, setBatches }) {
   const [loading, setLoading] = useState(true);
@@ -11,6 +12,7 @@ export default function Marketplace({ user, updateUser, listings, setListings, s
   const [buyErrors, setBuyErrors] = useState({});
   const [successMsg, setSuccessMsg] = useState("");
   const [tab, setTab] = useState("market");
+  const [confirmListing, setConfirmListing] = useState(null);
 
   useEffect(() => {
     client
@@ -21,6 +23,7 @@ export default function Marketplace({ user, updateUser, listings, setListings, s
   }, [setListings]);
 
   const buy = async (listing) => {
+    setConfirmListing(null);
     setBuyErrors((e) => ({ ...e, [listing.id]: "" }));
     setSuccessMsg("");
     setBuyingId(listing.id);
@@ -91,7 +94,7 @@ export default function Marketplace({ user, updateUser, listings, setListings, s
               <X size={13} /> Cancel
             </button>
           ) : (
-            <PrimaryBtn onClick={() => buy(l)} disabled={isLoading} className="shrink-0">
+            <PrimaryBtn onClick={() => setConfirmListing(l)} disabled={isLoading} className="shrink-0">
               {isLoading ? "…" : "Buy Now"}
             </PrimaryBtn>
           )}
@@ -102,6 +105,15 @@ export default function Marketplace({ user, updateUser, listings, setListings, s
 
   return (
     <div className="p-7 max-w-4xl">
+      {confirmListing && (
+        <BuyModal
+          listing={confirmListing}
+          loading={buyingId === confirmListing.id}
+          onConfirm={() => buy(confirmListing)}
+          onCancel={() => setConfirmListing(null)}
+        />
+      )}
+
       <PageHeader title="Marketplace" sub="Buy energy batches from other solar producers" />
 
       {error && (

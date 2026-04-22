@@ -4,6 +4,114 @@ import client from "../api/client";
 import { apiError, fmtWh, whToCAD, fmtDate, GRID_PRICE_CAD } from "../constants";
 import { Card, PrimaryBtn, StatCard, PageHeader, Spinner, ExpiryBadge } from "../components/ui";
 import MintModal from "../components/MintModal";
+import OffsetModal from "../components/OffsetModal";
+
+const STATUS_LABEL = {
+  available: { bg: "#f0fdf4", color: "#15803d", text: "Available" },
+  listed:    { bg: "#f0f9ff", color: "#0369a1", text: "Listed" },
+  minted:    { bg: "#faf5ff", color: "#7c3aed", text: "Minted" },
+  offset:    { bg: "#ecfdf5", color: "#059669", text: "Offset" },
+  expired:   { bg: "#fef2f2", color: "#b91c1c", text: "Expired" },
+};
+
+function BatchRow({ b, archived = false, act, errMsg, lf, onMintClick, onToggleListing, onPriceChange, onSubmitListing, onOffsetBatch }) {
+  const sl = STATUS_LABEL[b.status] ?? { bg: "#f8fafc", color: "#64748b", text: b.status };
+  const isAvail = b.status === "available";
+  const savingsPreview = isAvail ? whToCAD(b.wh_remaining).toFixed(3) : null;
+
+  return (
+    <div className={`px-6 py-4 ${archived ? "opacity-60" : ""}`}>
+      <div className="flex items-center gap-3 flex-wrap">
+        <span className="font-mono text-xs bg-slate-100 text-slate-700 px-2 py-1 rounded-lg shrink-0">
+          #{b.id}
+        </span>
+
+        <div className="flex-1 min-w-0">
+          <p className="font-semibold text-slate-900 text-sm">
+            {archived ? `${b.wh_remaining.toLocaleString()} Wh` : fmtWh(b.wh_remaining)}
+          </p>
+          <p className="text-xs text-slate-400 mt-0.5">
+            Logged {fmtDate(b.created_at)} · Expires {fmtDate(b.expires_at)}
+          </p>
+        </div>
+
+        <span className="text-xs font-bold px-2.5 py-1 rounded-full shrink-0" style={{ background: sl.bg, color: sl.color }}>
+          {sl.text}
+        </span>
+
+        {!archived && <ExpiryBadge level={b.warning_level} />}
+
+        {isAvail && (
+          <div className="flex gap-2 shrink-0 flex-wrap">
+            <button
+              onClick={onMintClick}
+              disabled={act.mint}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-bold border transition-all disabled:opacity-40"
+              style={{ background: "#faf5ff", color: "#7c3aed", borderColor: "#e9d5ff" }}
+            >
+              <Coins size={14} /> Mint to EC
+            </button>
+            <button
+              onClick={onToggleListing}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-bold border transition-all"
+              style={{ background: "#f0f9ff", color: "#0369a1", borderColor: "#bae6fd" }}
+            >
+              <Tag size={14} /> {lf.show ? "Cancel" : "List on Market"}
+            </button>
+            <button
+              onClick={onOffsetBatch}
+              disabled={act.offset}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-bold border transition-all disabled:opacity-40"
+              style={{ background: "#f0fdf4", color: "#15803d", borderColor: "#bbf7d0" }}
+            >
+              <FileCheck size={14} />
+              {act.offset ? "Applying…" : `Offset Bill (~$${savingsPreview} CAD)`}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {lf.show && (
+        <div className="mt-3 ml-14 p-4 rounded-xl border flex items-end gap-3" style={{ background: "#f0f9ff", borderColor: "#bae6fd" }}>
+          <div className="flex-1">
+            <label className="block text-xs font-bold text-slate-600 uppercase tracking-wide mb-1">
+              Your asking price (EC per kWh)
+            </label>
+            <div className="relative">
+              <input
+                type="text"
+                inputMode="decimal"
+                value={lf.ecPrice ?? ""}
+                onChange={(e) => onPriceChange(e.target.value)}
+                placeholder="0.50"
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none"
+              />
+              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400 font-bold">EC/kWh</span>
+            </div>
+            <p className="text-xs text-slate-400 mt-1">
+              Ceiling: 1.00 EC/kWh (grid parity) · Total:{" "}
+              <strong>
+                {lf.ecPrice && parseFloat(lf.ecPrice) > 0
+                  ? ((b.wh_remaining / 1000) * parseFloat(lf.ecPrice)).toFixed(4)
+                  : "—"}{" "}
+                EC
+              </strong>
+            </p>
+          </div>
+          <PrimaryBtn
+            onClick={onSubmitListing}
+            disabled={act.list || !lf.ecPrice || parseFloat(lf.ecPrice) <= 0}
+            className="shrink-0 py-2"
+          >
+            {act.list ? "Listing…" : "Confirm Listing"}
+          </PrimaryBtn>
+        </div>
+      )}
+
+      {errMsg && <p className="mt-2 ml-14 text-xs text-red-500 font-medium">{errMsg}</p>}
+    </div>
+  );
+}
 
 export default function Dashboard({ user, updateUser, batches, setBatches, reserve, setReserve }) {
   const [loading, setLoading] = useState(true);
@@ -12,6 +120,7 @@ export default function Dashboard({ user, updateUser, batches, setBatches, reser
   const [actionLoading, setActionLoading] = useState({});
   const [listingForm, setListingForm] = useState({});
   const [mintConfirm, setMintConfirm] = useState(null);
+  const [offsetConfirm, setOffsetConfirm] = useState(null);
   const [showArchive, setShowArchive] = useState(false);
 
   useEffect(() => {
@@ -77,6 +186,7 @@ export default function Dashboard({ user, updateUser, batches, setBatches, reser
   };
 
   const offsetBatch = async (batch) => {
+    setOffsetConfirm(null);
     setErr(batch.id, "");
     setAct(batch.id, { offset: true });
     try {
@@ -89,121 +199,6 @@ export default function Dashboard({ user, updateUser, batches, setBatches, reser
     }
   };
 
-  const STATUS_LABEL = {
-    available: { bg: "#f0fdf4", color: "#15803d", text: "Available" },
-    listed:    { bg: "#f0f9ff", color: "#0369a1", text: "Listed" },
-    minted:    { bg: "#faf5ff", color: "#7c3aed", text: "Minted" },
-    offset:    { bg: "#ecfdf5", color: "#059669", text: "Offset" },
-    expired:   { bg: "#fef2f2", color: "#b91c1c", text: "Expired" },
-  };
-
-  const BatchRow = ({ b, archived = false }) => {
-    const act  = actionLoading[b.id] ?? {};
-    const errMsg = actionError[b.id];
-    const lf   = listingForm[b.id] ?? {};
-    const sl   = STATUS_LABEL[b.status] ?? { bg: "#f8fafc", color: "#64748b", text: b.status };
-    const isAvail = b.status === "available";
-    const savingsPreview = isAvail ? whToCAD(b.wh_remaining).toFixed(3) : null;
-
-    return (
-      <div className={`px-6 py-4 ${archived ? "opacity-60" : ""}`}>
-        <div className="flex items-center gap-3 flex-wrap">
-          <span className="font-mono text-xs bg-slate-100 text-slate-700 px-2 py-1 rounded-lg shrink-0">
-            #{b.id}
-          </span>
-
-          <div className="flex-1 min-w-0">
-            <p className="font-semibold text-slate-900 text-sm">
-              {archived ? `${b.wh_remaining.toLocaleString()} Wh` : fmtWh(b.wh_remaining)}
-            </p>
-            <p className="text-xs text-slate-400 mt-0.5">
-              Logged {fmtDate(b.created_at)} · Expires {fmtDate(b.expires_at)}
-            </p>
-          </div>
-
-          <span className="text-xs font-bold px-2.5 py-1 rounded-full shrink-0" style={{ background: sl.bg, color: sl.color }}>
-            {sl.text}
-          </span>
-
-          {!archived && <ExpiryBadge level={b.warning_level} />}
-
-          {isAvail && (
-            <div className="flex gap-2 shrink-0 flex-wrap">
-              <button
-                onClick={() => setMintConfirm(b)}
-                disabled={act.mint}
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-bold border transition-all disabled:opacity-40"
-                style={{ background: "#faf5ff", color: "#7c3aed", borderColor: "#e9d5ff" }}
-              >
-                <Coins size={14} /> Mint to EC
-              </button>
-              <button
-                onClick={() =>
-                  setListingForm((p) => ({
-                    ...p,
-                    [b.id]: lf.show ? { show: false, ecPrice: "" } : { show: true, ecPrice: "" },
-                  }))
-                }
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-bold border transition-all"
-                style={{ background: "#f0f9ff", color: "#0369a1", borderColor: "#bae6fd" }}
-              >
-                <Tag size={14} /> {lf.show ? "Cancel" : "List on Market"}
-              </button>
-              <button
-                onClick={() => offsetBatch(b)}
-                disabled={act.offset}
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-bold border transition-all disabled:opacity-40"
-                style={{ background: "#f0fdf4", color: "#15803d", borderColor: "#bbf7d0" }}
-              >
-                <FileCheck size={14} />
-                {act.offset ? "Applying…" : `Offset Bill (~$${savingsPreview} CAD)`}
-              </button>
-            </div>
-          )}
-        </div>
-
-        {lf.show && (
-          <div className="mt-3 ml-14 p-4 rounded-xl border flex items-end gap-3" style={{ background: "#f0f9ff", borderColor: "#bae6fd" }}>
-            <div className="flex-1">
-              <label className="block text-xs font-bold text-slate-600 uppercase tracking-wide mb-1">
-                Your asking price (EC per kWh)
-              </label>
-              <div className="relative">
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={lf.ecPrice ?? ""}
-                  onChange={(e) => setListingForm((p) => ({ ...p, [b.id]: { ...p[b.id], ecPrice: e.target.value } }))}
-                  placeholder="0.50"
-                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none"
-                />
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400 font-bold">EC/kWh</span>
-              </div>
-              <p className="text-xs text-slate-400 mt-1">
-                Ceiling: 1.00 EC/kWh (grid parity) · Total:{" "}
-                <strong>
-                  {lf.ecPrice && parseFloat(lf.ecPrice) > 0
-                    ? ((b.wh_remaining / 1000) * parseFloat(lf.ecPrice)).toFixed(4)
-                    : "—"}{" "}
-                  EC
-                </strong>
-              </p>
-            </div>
-            <PrimaryBtn
-              onClick={() => submitListing(b)}
-              disabled={act.list || !lf.ecPrice || parseFloat(lf.ecPrice) <= 0}
-              className="shrink-0 py-2"
-            >
-              {act.list ? "Listing…" : "Confirm Listing"}
-            </PrimaryBtn>
-          </div>
-        )}
-
-        {errMsg && <p className="mt-2 ml-14 text-xs text-red-500 font-medium">{errMsg}</p>}
-      </div>
-    );
-  };
-
   return (
     <div className="p-7 max-w-5xl">
       {mintConfirm && (
@@ -212,6 +207,15 @@ export default function Dashboard({ user, updateUser, batches, setBatches, reser
           loading={!!actionLoading[mintConfirm.id]?.mint}
           onConfirm={() => doMint(mintConfirm)}
           onCancel={() => setMintConfirm(null)}
+        />
+      )}
+
+      {offsetConfirm && (
+        <OffsetModal
+          batches={[offsetConfirm]}
+          loading={!!actionLoading[offsetConfirm.id]?.offset}
+          onConfirm={() => offsetBatch(offsetConfirm)}
+          onCancel={() => setOffsetConfirm(null)}
         />
       )}
 
@@ -262,7 +266,27 @@ export default function Dashboard({ user, updateUser, batches, setBatches, reser
               <p className="text-sm text-slate-400 text-center py-10">No active batches — log energy to get started.</p>
             ) : (
               <div className="divide-y divide-slate-50">
-                {activeBatchList.map((b) => <BatchRow key={b.id} b={b} />)}
+                {activeBatchList.map((b) => (
+                  <BatchRow
+                    key={b.id}
+                    b={b}
+                    act={actionLoading[b.id] ?? {}}
+                    errMsg={actionError[b.id]}
+                    lf={listingForm[b.id] ?? {}}
+                    onMintClick={() => setMintConfirm(b)}
+                    onToggleListing={() =>
+                      setListingForm((p) => ({
+                        ...p,
+                        [b.id]: p[b.id]?.show ? { show: false, ecPrice: "" } : { show: true, ecPrice: "" },
+                      }))
+                    }
+                    onPriceChange={(val) =>
+                      setListingForm((p) => ({ ...p, [b.id]: { ...p[b.id], ecPrice: val } }))
+                    }
+                    onSubmitListing={() => submitListing(b)}
+                    onOffsetBatch={() => setOffsetConfirm(b)}
+                  />
+                ))}
               </div>
             )}
           </Card>
@@ -278,7 +302,21 @@ export default function Dashboard({ user, updateUser, batches, setBatches, reser
               </button>
               {showArchive && (
                 <div className="divide-y divide-slate-50 border-t border-slate-100">
-                  {archiveBatchList.map((b) => <BatchRow key={b.id} b={b} archived />)}
+                  {archiveBatchList.map((b) => (
+                  <BatchRow
+                    key={b.id}
+                    b={b}
+                    archived
+                    act={{}}
+                    errMsg={null}
+                    lf={{}}
+                    onMintClick={() => {}}
+                    onToggleListing={() => {}}
+                    onPriceChange={() => {}}
+                    onSubmitListing={() => {}}
+                    onOffsetBatch={() => {}}
+                  />
+                ))}
                 </div>
               )}
             </Card>

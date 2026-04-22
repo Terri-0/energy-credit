@@ -38,6 +38,7 @@ func Register(r *gin.Engine) {
 
 		// Economy
 		protected.POST("economy/offset", handlers.OffsetBatch)
+		protected.GET("economy/offsets", handlers.GetOffsets)
 		protected.POST("economy/buy-ec", handlers.BuyEC)
 		protected.GET("economy/reserve", handlers.GetReserve)
 	}

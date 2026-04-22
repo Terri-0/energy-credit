@@ -190,6 +190,43 @@ func BuyEC(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"purchase": purchase})
 }
 
+func GetOffsets(c *gin.Context) {
+	userID, ok := getUserID(c)
+	if !ok {
+		return
+	}
+
+	now := time.Now()
+	startOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+
+	var offsets []models.BillOffset
+	if err := config.DB.
+		Where("user_id = ? AND created_at >= ?", userID, startOfMonth).
+		Order("created_at desc").
+		Find(&offsets).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not retrieve offsets"})
+		return
+	}
+
+	gridPrice, err := getEnvFloat("GRID_PRICE", 0.10)
+	if err != nil || gridPrice <= 0 {
+		gridPrice = 0.10
+	}
+
+	var totalWh, totalEC float64
+	for _, o := range offsets {
+		totalWh += o.WhAmount
+		totalEC += o.EcEquivalent
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"offsets":   offsets,
+		"total_wh":  roundTo(totalWh, 4),
+		"total_cad": roundTo(totalWh/1000*gridPrice, 4),
+		"month":     now.Format("January 2006"),
+	})
+}
+
 func GetReserve(c *gin.Context) {
 	_, ok := getUserID(c)
 	if !ok {
