@@ -29,7 +29,7 @@ The mint rate is intentionally set below the listing ceiling to incentivise sell
 | Layer    | Technology                                     |
 | -------- | ---------------------------------------------- |
 | Frontend | React 19 + Vite 7 + Tailwind v4 + lucide-react |
-| Backend  | Go 1.24 + Gin v1.11 + GORM v1.31 + JWT v5      |
+| Backend  | Go 1.25 + Gin v1.11 + GORM v1.31 + JWT v5      |
 | Database | PostgreSQL 16 (Docker)                         |
 
 ---
@@ -51,18 +51,22 @@ git clone <repo-url>
 cd energy-credit
 ```
 
-The backend loads `.env` from the project root automatically. A `.env` is already included in the repository with sensible defaults — no changes needed to run locally.
+Copy `.env.example` to `.env` and fill in your values (the defaults work for local Docker):
 
-Key variables in `.env`:
+```bash
+cp .env.example .env
+```
+
+Key variables:
 
 ```
-DB_URL                 # PostgreSQL connection string the exact link provided in env.example
-JWT_SECRET             # signing secret for auth tokens
-EC_MINT_RATE=0.0007    # EC per Wh minted (0.7 EC/kWh)
-EC_MINT_FEE=0.06       # platform fee fraction (6%)
+DB_URL=postgres://ec_user:ec_pass@localhost:5432/energy_credit?sslmode=disable
+JWT_SECRET=change-me-in-production
+EC_MINT_RATE=0.0007       # EC per Wh minted (0.7 EC/kWh)
+EC_MINT_FEE=0.06          # platform fee fraction (6%)
 EC_LISTING_CEILING=0.001  # max EC/Wh on marketplace (grid parity)
-GRID_PRICE=0.10        # CAD per kWh
-SIM_PERIOD_SECONDS=120 # seconds for a panel to accumulate full capacity
+GRID_PRICE=0.10           # CAD per kWh
+SIM_PERIOD_SECONDS=120    # seconds for a panel to accumulate full capacity
 ```
 
 ### 2. Start the database
@@ -102,6 +106,102 @@ SIM_PERIOD_SECONDS=86400
 
 ---
 
+## Testing
+
+The test suite has three layers: unit tests (no server needed), integration tests (server required), and the concurrent buy stress test. All tests live in `ec-backend/tests/`.
+
+### Unit Tests
+
+Pure Go function tests — no server or database required. Tests the minting formula, `roundTo`, and `getEnvFloat` across edge cases.
+
+```bash
+cd ec-backend
+go test ./tests/unit/... -v
+```
+
+### Integration Tests
+
+Tests every API endpoint end-to-end against the live server. Each test registers its own isolated users with unique emails so tests are fully independent and can run in parallel.
+
+**The server must be running on `:8080` before running these.**
+
+```bash
+# All integration tests except the concurrent buy test
+go test ./tests/integration/... -v -timeout 60s -run "^Test[^C]"
+
+# Run specific groups
+go test ./tests/integration/... -v -timeout 60s -run "^TestRegister"
+go test ./tests/integration/... -v -timeout 60s -run "^Test(Create|Cancel)"
+```
+
+### Concurrent Buy Stress Test
+
+The most important test. Registers 10 buyers and fires all 10 purchase requests at the same listing simultaneously using `sync.WaitGroup`. Asserts exactly 1 succeeds (HTTP 200) and exactly 9 are rejected (HTTP 409). This proves the `SELECT FOR UPDATE` row locking prevents double-selling.
+
+```bash
+go test ./tests/integration/... -v -timeout 30s -run TestConcurrentBuy
+```
+
+Expected output:
+```
+Concurrent buy test: 1/10 succeeded, 9/10 correctly rejected
+PASS TestConcurrentBuy_ExactlyOneSucceeds — SELECT FOR UPDATE works correctly
+```
+
+### Run Everything with the Test Script
+
+The script runs unit tests, all integration tests, the concurrent buy test, and the market simulation in sequence.
+
+**Requires the server to be running on `:8080`.**
+
+```bash
+cd ec-backend
+bash scripts/run_tests.sh
+```
+
+---
+
+## Market Simulation
+
+The simulation registers 5 producers and 3 consumers, logs energy, creates marketplace listings, executes trades, applies a bill offset, and prints a formatted market report with real API numbers.
+
+**Requires the server to be running on `:8080`.**
+
+```bash
+cd ec-backend
+go run ./cmd/simulate/main.go
+```
+
+The simulation is idempotent — re-running it will log in to existing accounts rather than failing on duplicate emails. It waits `SIM_PERIOD_SECONDS + 5` seconds (default: 125s) for panels to accumulate energy before logging.
+
+Example output:
+```
+╔══════════════════════════════════════════════════════╗
+║         ENERGYCREDIT MARKET SIMULATION               ║
+╚══════════════════════════════════════════════════════╝
+
+PARTICIPANTS
+  Producers: 5  |  Consumers: 3
+
+EC MINTING SUMMARY
+  Total Wh Logged:      11,500 Wh
+  Total EC Gross:       8.050 EC
+  Total Fees Burned:    0.483 EC  (6.0%)
+  Total EC Minted:      7.567 EC
+
+MARKETPLACE ACTIVITY
+  Listings Created:     4
+  Trades Attempted:     4
+  Trades Completed:     3
+  Trades Failed:        1  (insufficient balance)
+  Avg Price:            0.000065 EC/Wh
+  Grid Ceiling:         0.001000 EC/Wh
+  Avg Discount vs Grid: 93.5%
+...
+```
+
+---
+
 ## API Routes
 
 All protected routes require `Authorization: Bearer <token>`.
@@ -123,6 +223,7 @@ POST   /api/listings/:id/buy          [protected]
 DELETE /api/listings/:id              [protected]
 
 POST   /api/economy/offset            [protected]
+GET    /api/economy/offsets           [protected]  ← monthly offset log
 POST   /api/economy/buy-ec            [protected]
 GET    /api/economy/reserve           [protected]
 ```
@@ -132,12 +233,12 @@ GET    /api/economy/reserve           [protected]
 ## Wh Batch Lifecycle
 
 ```
-available → listed   (listed on marketplace)
-available → minted   (converted to EC)
-available → offset   (applied to bill)
+available → listed    (listed on marketplace)
+available → minted    (converted to EC)
+available → offset    (applied to bill)
 listed    → available (listing cancelled)
-listed    → offset   (listing purchased by buyer)
-any       → expired  (30-day TTL elapsed)
+listed    → offset    (listing purchased by buyer)
+any       → expired   (30-day TTL elapsed — pure loss by design)
 ```
 
 ---
@@ -161,10 +262,10 @@ bill_offsets      id, user_id, batch_id, wh_amount, ec_equivalent, created_at
 ## Security
 
 - Passwords hashed with bcrypt
-- JWT HS256 with algorithm confusion defence (rejects non-HMAC tokens)
+- JWT HS256 with algorithm confusion defence (rejects `alg:none` and any non-HMAC algorithm)
 - User enumeration protection on login (identical error for unknown email vs. wrong password)
-- All marketplace operations use `SELECT FOR UPDATE` row locking with ascending ID ordering to prevent deadlocks
-- `RowsAffected == 1` guards on all critical writes
+- All marketplace operations use `SELECT FOR UPDATE` with ascending ID ordering to prevent deadlocks
+- `RowsAffected == 1` assertion on every critical write
 
 ---
 
@@ -173,7 +274,8 @@ bill_offsets      id, user_id, batch_id, wh_amount, ec_equivalent, created_at
 - **Fiat payments are simulated** — no real payment processor; EC is credited directly
 - **No token blacklist** — logout only clears the client-side token; the JWT remains valid until expiry
 - **Flat generation simulation** — panels generate at a constant rate (no day/night solar curve)
-- **Frontend single-user optimistic updates** — EC balance is updated client-side after transactions; a hard refresh will always show the authoritative value from the database
+- **No partial batch listings** — a batch must be listed in full
+- **Frontend optimistic updates** — EC balance is updated client-side after transactions; a hard refresh always shows the authoritative database value
 
 ---
 
@@ -182,19 +284,28 @@ bill_offsets      id, user_id, batch_id, wh_amount, ec_equivalent, created_at
 ```
 energy-credit/
 ├── docker-compose.yml
+├── .env.example
 ├── ec-backend/
 │   ├── main.go
-│   ├── config/        # DB connection
-│   ├── middleware/    # JWT auth
-│   ├── models/        # GORM models (9 tables)
-│   ├── handlers/      # Route handlers
-│   └── routes/        # Route registration
+│   ├── config/           # DB connection + AutoMigrate
+│   ├── middleware/       # JWT auth (algorithm confusion defence)
+│   ├── models/           # GORM models (9 tables)
+│   ├── handlers/         # Route handlers
+│   ├── routes/           # Route registration
+│   ├── cmd/
+│   │   └── simulate/     # Market simulation (go run ./cmd/simulate/main.go)
+│   ├── tests/
+│   │   ├── unit/         # Pure function tests (no server required)
+│   │   └── integration/  # End-to-end API tests + concurrent buy stress test
+│   └── scripts/
+│       └── run_tests.sh  # Runs all tests + simulation in sequence
 └── ec-frontend/
     ├── vite.config.js
     └── src/
-        ├── App.jsx           # Root component
+        ├── App.jsx           # Root component + shared state
         ├── constants.js      # EC economic constants + helpers
         ├── api/client.js     # Axios instance with auth interceptor
-        ├── components/       # Shared UI components, Sidebar, MintModal
-        └── pages/            # One file per page
+        ├── components/       # Sidebar, modals (Mint/Buy/Offset), shared UI
+        └── pages/            # Dashboard, Marketplace, LogEnergy, MyPanels,
+                              # BillOffset, BuyEC, AuthPage
 ```
